@@ -1,0 +1,19 @@
+# General
+
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.lock
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+Docs/
+__pycache__/
+*.pyc
+venv/
