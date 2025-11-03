@@ -43,12 +43,12 @@ class Wind:
 
     V0_x: float = 0.0
     V0_y: float = 0.0
-    V0_z: float = 10.0
+    V0_z: float = 9.0
 
     # Instantaneous wind components in ground system
     Vx: float = 0.0
     Vy: float = 0.0
-    Vz: float = 10.0
+    Vz: float = 9.0
 
     # Atmosphere
     density: float = 1.225 # kg/m^3
@@ -64,7 +64,7 @@ class Simulation:
     """Simulation parameters and time/state arrays for multi-blade FEM/BEM solver."""
     omega: float = 0.62        # Rotor angular velocity (rad/s)
     dt: float = 0.15
-    duration: float = 10.5
+    duration: float = 300
     r: float = 70.0            # Element position (m)
     dynamicStall: bool = True
 
@@ -114,6 +114,9 @@ class AeroData:
     wtg: "WTG"
     sim: "Simulation"
 
+    AXIAL = 2
+    TANGENTIAL = 1
+
     airfoilFiles: List[Path] = field(default_factory=list)
 
     nBlades: int = field(init=False)
@@ -154,12 +157,13 @@ class AeroData:
 
         # Initialize aerodynamic arrays
         vector_shape = (3, self.nElements, self.nBlades, self.nSteps)
+        induced_shape = (2, self.nElements, self.nBlades, self.nSteps)
         scalar_shape = (self.nElements, self.nBlades, self.nSteps)
 
         self.windSpeed = np.zeros(vector_shape)
-        self.inducedWind = np.zeros(vector_shape)
-        self.inducedWindQS = np.zeros(vector_shape)
-        self.inducedWindInt = np.zeros(scalar_shape)
+        self.inducedWind = np.zeros(induced_shape)
+        self.inducedWindQS = np.zeros(induced_shape)
+        self.inducedWindInt = np.zeros(induced_shape)
         self.relWindSpeed = np.zeros(vector_shape)
 
         self.AoA = np.zeros(scalar_shape)

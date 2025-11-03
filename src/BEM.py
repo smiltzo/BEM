@@ -1,7 +1,9 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 import BEM_utils as func
+import induction_module as ind
 from BEM_dataclasses import WTG, Wind, Simulation, AeroData
 from scipy.interpolate import RegularGridInterpolator
 
@@ -45,12 +47,15 @@ a34 = np.array([
     [0.0, 1.0, 0.0],
     [np.sin(wtg.cone), 0.0, np.cos(wtg.cone)]
 ])
+
+debugIdx = (8, 0, 8)
+
 # ------------------------
 # TIME LOOP
 # ------------------------
 for i in range(sim.nSteps):
+    
     # BLADE LOOP
-
     for j in range(wtg.blades):
         sim.theta[j, i + 1] = sim.theta[j, i] + sim.omega * sim.dt
         a23_blade1 = func.get_a23(sim.theta[j, i + 1])
@@ -66,39 +71,81 @@ for i in range(sim.nSteps):
             if wind.hasShear:
                 V_local[2, 0] = func.wind_shear(wind, wtg, sim.position[0, *idx1])
 
+            if idx1 == debugIdx:
+                hello = "Debug"
+
             if wind.hasTowerEffect:
                 wtg.update_tower_radius(sim.position[0, *idx1])
                 wind.Vz = V_local[2, 0]
-                V_local = func.tower_model(wind, wtg,
+                V_local, isStagnant = func.tower_model(wind, wtg,
                                       sim.position[1, *idx1],
-                                      sim.position[2, *idx1])
+                                      sim.position[2, *idx1])  
+                if isStagnant:
+                    V_local = sim.windSpeed[:, *idx]
 
             sim.windSpeed[:, *idx1] = func.go_to_ground_system(a12, a23_blade1, a34,
                                                                      V_local).squeeze()
+            # sim.windSpeed[: ,*idx1] = V_local.squeeze()
             
             # BEM stuff - Induced wind
             aero.relWindSpeed[1, *idx1] = (sim.windSpeed[1, *idx1] + aero.inducedWind[1, *idx] - sim.omega * wtg.bladeData["r"][e] * wtg.cone).squeeze()
             aero.relWindSpeed[2, *idx1] = (sim.windSpeed[2, *idx1] + aero.inducedWind[2, *idx]).squeeze()
 
-            aero.flowAngle[*idx1] = func.flow_angle(aero.relWindSpeed[1, *idx1],
-                                                          aero.relWindSpeed[2, *idx1])
-            aero.AoA[*idx1] = aero.flowAngle[*idx1] - (wtg.bladeData["twist"][e] + wtg.pitch0)
+            # Nan Check
+            # arr = aero.inducedWind
+            # nanCheck = np.isnan(arr)
+            # print("NaN in induced wind Z:", np.sum(nanCheck))
+            # print("NaN by axis 0 (components):", np.sum(nanCheck, axis=(1,2,3)))
+            # print(f"NaNs in blade elemtnt: {np.sum(nanCheck, axis=(0, 2, 3))}")
+            # print(f"NaNs in blade: {np.sum(nanCheck, axis=(0, 1, 3))}")
+            # print(f"Nans in time: {np.sum(nanCheck, axis=(0, 1, 2))}")
 
-            relWindSpeedMagnitude = np.sqrt(aero.relWindSpeed[1, *idx1]**2 + aero.relWindSpeed[2, *idx1]**2)
+            # right after aero.relWindSpeed assignment
+            vals = dict(
+                windSpeed1 = sim.windSpeed[1, *idx1],
+                windSpeed2 = sim.windSpeed[2, *idx1],
+                induced1 = aero.inducedWind[1, *idx],
+                induced2 = aero.inducedWind[2, *idx],
+                rel1 = aero.relWindSpeed[1, *idx1],
+                rel2 = aero.relWindSpeed[2, *idx1],
+            )
+            for k, v in vals.items():
+                if np.isnan(v) or np.isinf(v):
+                    print(f"NaN/inf detected at idx={idx1}: {k}={v}")
+                    # optionally print more context:
+                    print("sim.windSpeed slice:", sim.windSpeed[:, :, :, :].shape)  # or more targeted prints
+                    raise RuntimeError("Debug: NaN/Inf detected")
+
+            try:
+                flowAngle = func.flow_angle(-aero.relWindSpeed[2, *idx1],
+                                                            aero.relWindSpeed[1, *idx1]) # Nan here
+            except ValueError as e:
+                print(f"Error computing flow angle at idx {idx1}: {e}")
+                print(f"Vrel_y: {aero.relWindSpeed[1, *idx1]}, Vrel_z: {aero.relWindSpeed[2, *idx1]}")
+                flowAngle = 0.0
+
+            aero.flowAngle[*idx1] = flowAngle
+
+            # AoA in degrees
+            aero.AoA[*idx1] = np.rad2deg(aero.flowAngle[*idx1]) - (wtg.bladeData["twist"][e] + wtg.pitch0)
+
+            # Nan here
+            relWindSpeedMagnitude = np.hypot(aero.relWindSpeed[1, *idx1], aero.relWindSpeed[2, *idx1])
             
             # Read and interpolate lift and drag
-            Cd = func.interpolate_drag(aero, wtg, (aero.AoA[*idx1], wtg.bladeData["thick"][e]))
+            point = np.atleast_2d((aero.AoA[*idx1], wtg.bladeData["thick"][e]))
+            Cd = func.interpolate_drag(aero, wtg, point, idx1)
 
             if sim.dynamicStall:
                 # S. Øye dyn. stall model
-                cl_inv, f_s, cl_fs = func.interpolate_lift_dyn_stall(aero, wtg,
-                                                                     (aero.AoA[*idx1], wtg.bladeData["thick"][e]))
+                cl_inv, f_s, cl_fs = func.interpolate_lift_dyn_stall(aero, wtg, point)
+
                 tau = 4 * wtg.bladeData["chord"][e] / relWindSpeedMagnitude
                 aero.separationFactor[*idx1] = f_s + (aero.separationFactor[*idx] - f_s) * np.exp(-sim.dt / tau)
                 Cl = aero.separationFactor[*idx1] * cl_inv + (1 - aero.separationFactor[*idx1]) * cl_fs
             else:
                 # Just steady-state Cl
-                Cl = func.interpolate_lift(aero, wtg, (aero.AoA[*idx1], wtg.bladeData["thick"][e]))
+                Cl = func.interpolate_lift(aero, wtg, point)
 
             # Compute element Lift and Drag
             lift = 0.5 * wind.density * relWindSpeedMagnitude**2 * Cl * wtg.bladeData["chord"][e]
@@ -108,22 +155,73 @@ for i in range(sim.nSteps):
             aero.drag[*idx1] = drag.squeeze()
 
             # Rotate them into rotor plane (by the pitch angle)
-            pNormal = lift * np.cos(np.rad2deg(aero.flowAngle[*idx1])) + drag * np.sin(np.rad2deg(aero.flowAngle[*idx1]))
-            pTangent = drag * np.sin(np.rad2deg(aero.flowAngle[*idx1])) - lift * np.cos(np.rad2deg(aero.flowAngle[*idx1]))
+            pNormal =  lift * np.cos(aero.flowAngle[*idx1]) + drag * np.sin(aero.flowAngle[*idx1])
+            pTangent = drag * np.sin(aero.flowAngle[*idx1]) - lift * np.cos(aero.flowAngle[*idx1])
             
             aero.normalForce[*idx1] = pNormal.squeeze()
             aero.tangentialForce[*idx1] = pTangent.squeeze()
 
             # ---- DYNAMIC INFLOW ----
             # Compute Quasi-Steady induced winds
-            # aero.inducedWindQS[1:, *idx1] = func.compute_quasi_steady_induction(aero, wtg, wind, sim, idx1).squeeze()
-            func.compute_induction(aero, sim, wtg, wind, idx1)
+            # aero.inducedWindQS[1:, *idx1] = ind.compute_quasi_steady_induction(aero, wtg, wind, sim, idx1).squeeze()
+            if idx1 == debugIdx:
+                hello = "Debug"
+            # ind.compute_induction(aero, sim, wtg, wind, idx1)
             end_inner_loop = "Done"
 
 
 
-
 calculations = "Done"
+# Forces, moments and power calculation
+shape = (wtg.blades, sim.nSteps + 1)
+
+F_normal = np.zeros(shape)
+F_tangent = np.zeros(shape)
+Thrust = np.zeros(shape)
+Torque = np.zeros(shape)
+
+dr = np.gradient(wtg.bladeData["r"])
+for b in range(wtg.blades):
+    F_normal[b, :] = np.sum(aero.normalForce[:, b, :] * dr[:, None], axis=0)
+    F_tangent[b, :] = np.sum(aero.tangentialForce[:, b, :] * dr[:, None], axis=0)
+
+    Thrust[b, :] = F_normal[b, :]
+    Torque[b, :] = np.sum(aero.tangentialForce[:, b, :] * wtg.bladeData["r"][:, None] * dr[:, None], axis=0)
+
+loads = {
+    "F_normal": F_normal,
+    "F_tangent": F_tangent,
+    "Thrust": Thrust,
+    "Torque": Torque,
+}
+
+# Dump results to temporary CSV
+output_path = Path("Tmp/debug_results1.csv")
+# Store everything into dictionary first
+results_dict = {
+    "position_x": sim.position[0].reshape(-1),
+    "position_y": sim.position[1].reshape(-1),
+    "position_z": sim.position[2].reshape(-1),
+    "windSpeed_x": sim.windSpeed[0].reshape(-1),
+    "windSpeed_y": sim.windSpeed[1].reshape(-1),
+    "windSpeed_z": sim.windSpeed[2].reshape(-1),
+    "AoA": aero.AoA.reshape(-1),
+    "flowAngle": aero.flowAngle.reshape(-1),
+    "lift": aero.lift.reshape(-1),
+    "drag": aero.drag.reshape(-1),
+    "normalForce": aero.normalForce.reshape(-1),
+    "tangentialForce": aero.tangentialForce.reshape(-1),
+    "inducedWind_y": aero.inducedWind[1].reshape(-1),
+    "inducedWind_z": aero.inducedWind[2].reshape(-1),
+    "F_normal": F_normal.reshape(-1),
+    "F_tangent": F_tangent.reshape(-1),
+    "Thrust": Thrust.reshape(-1),
+    "Torque": Torque.reshape(-1),
+}
+# df = pd.DataFrame(results_dict, columns=results_dict.keys(), index=None)
+# df.to_csv(output_path, index=False)
+
+results = "Stored"
 # ------------------------
 # PLOT RESULTS
 # ------------------------

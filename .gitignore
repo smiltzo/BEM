@@ -14,6 +14,7 @@ Thumbs.db
 *.rar
 
 Docs/
+Tmp/
 __pycache__/
 *.pyc
 venv/
