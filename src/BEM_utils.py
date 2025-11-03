@@ -101,7 +101,7 @@ def interpolate_lift(aero: AeroData, wtg: WTG,
     return float(Cl_interpolator(point))
 
 
-def interpolate_lift_dyn_stall(aero: AeroData, wtg: WTG,
+def interpolate_coeffs_dyn_stall(aero: AeroData, wtg: WTG,
                                point: tuple[float, float] | List[float] | np.ndarray) -> tuple[float, float, float]:
     interp_cl_inv = RegularGridInterpolator(
         (aero.airfoils["AoA"], wtg.thicknesses / 10),
@@ -111,7 +111,7 @@ def interpolate_lift_dyn_stall(aero: AeroData, wtg: WTG,
     
     interp_fs = RegularGridInterpolator(
         (aero.airfoils["AoA"], wtg.thicknesses / 10), 
-        aero.airfoils["Cl_fs"],
+        aero.airfoils["f_s"],
         bounds_error=False,
         fill_value=None)
     
@@ -125,8 +125,7 @@ def interpolate_lift_dyn_stall(aero: AeroData, wtg: WTG,
 
 
 def interpolate_drag(aero: AeroData, wtg: WTG,
-                     point: tuple[float, float] | List[float] | np.ndarray, indices: tuple[int, int, int]) -> float:
-    # print(f"Indices: {indices}")
+                     point: tuple[float, float] | List[float] | np.ndarray) -> float:
     Cd_interpolator = RegularGridInterpolator(
         (aero.airfoils["AoA"], wtg.thicknesses / 10), 
         aero.airfoils["Cd"],

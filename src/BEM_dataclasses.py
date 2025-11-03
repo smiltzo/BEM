@@ -135,6 +135,12 @@ class AeroData:
     lift: np.ndarray = field(init=False)
     drag: np.ndarray = field(init=False)
 
+    Cd: np.ndarray = field(init=False)
+    Cl: np.ndarray = field(init=False)
+    cl_inv: np.ndarray = field(init=False)
+    f_s: np.ndarray = field(init=False)
+    cl_fs: np.ndarray = field(init=False)
+
     normalForce: np.ndarray = field(init=False)
     tangentialForce: np.ndarray = field(init=False)
 
@@ -161,7 +167,7 @@ class AeroData:
         scalar_shape = (self.nElements, self.nBlades, self.nSteps)
 
         self.windSpeed = np.zeros(vector_shape)
-        self.inducedWind = np.zeros(induced_shape)
+        self.inducedWind = np.zeros(vector_shape)
         self.inducedWindQS = np.zeros(induced_shape)
         self.inducedWindInt = np.zeros(induced_shape)
         self.relWindSpeed = np.zeros(vector_shape)
@@ -171,12 +177,19 @@ class AeroData:
         self.drag = np.zeros(scalar_shape)
         self.flowAngle = np.zeros(scalar_shape)
 
+        self.Cd = np.zeros(scalar_shape)
+        self.Cl = np.zeros(scalar_shape)
+        
+
         self.normalForce = np.zeros(scalar_shape)
         self.tangentialForce = np.zeros(scalar_shape)
 
 
         if self.sim.dynamicStall:
             self.separationFactor = np.zeros(scalar_shape)
+            self.cl_inv = np.zeros(scalar_shape)
+            self.f_s = np.zeros(scalar_shape)
+            self.cl_fs = np.zeros(scalar_shape)
 
         try:
             # Read all files and combine them into one DataFrame (side-by-side)
