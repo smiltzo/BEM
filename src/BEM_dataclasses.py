@@ -17,11 +17,11 @@ class WTG:
         default_factory=lambda: np.array([999, 600, 480, 360, 301, 241])
     )
     # Angles
-    yaw: float = np.deg2rad(20.0)
+    yaw: float = np.deg2rad(0.0)
     tilt: float = np.deg2rad(0.0)
     roll: float = np.deg2rad(0.0)
     cone: float = np.deg2rad(0.0)
-    pitch0: float = np.deg2rad(2.0)
+    pitch0: float = np.deg2rad(0.0)
 
 
     bladeData: Dict = field(init=False)
@@ -62,9 +62,9 @@ class Wind:
 @dataclass
 class Simulation:
     """Simulation parameters and time/state arrays for multi-blade FEM/BEM solver."""
-    omega: float = 0.62        # Rotor angular velocity (rad/s)
+    omega: float = 7.229 * np.pi / 30.0        # Rotor angular velocity (rad/s)
     dt: float = 0.15
-    duration: float = 300
+    duration: float = 60
     r: float = 70.0            # Element position (m)
     dynamicStall: bool = True
 
@@ -168,7 +168,7 @@ class AeroData:
 
         self.windSpeed = np.zeros(vector_shape)
         self.inducedWind = np.zeros(vector_shape)
-        self.inducedWindQS = np.zeros(induced_shape)
+        self.inducedWindQS = np.zeros(vector_shape)
         self.inducedWindInt = np.zeros(induced_shape)
         self.relWindSpeed = np.zeros(vector_shape)
 

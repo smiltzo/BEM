@@ -6,10 +6,14 @@ import BEM_utils as func
 import induction_module as ind
 from BEM_dataclasses import WTG, Wind, Simulation, AeroData
 import warnings
-import pdb
+import logging
+from datetime import datetime
 
-np.seterr(all='raise')
-warnings.filterwarnings("error")
+debugRunId = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+logging.basicConfig(filename=f"Tmp/debug_log_{debugRunId}.txt", level=logging.INFO, filemode='w')
+
+# np.seterr(all='raise')
+# warnings.filterwarnings("error")
 
 # Dataclasses
 wtg = WTG()
@@ -19,7 +23,7 @@ aero = AeroData(wtg, sim, [f"FFA-W3-{n}.csv" for n in wtg.thicknesses])
 
 wind.hasTowerEffect = True
 wind.hasShear = True
-wtg.yaw = np.deg2rad(0.0)
+wtg.yaw = np.deg2rad(20.0)
 
 tangt = aero.TANGENTIAL
 axial = aero.AXIAL
@@ -56,116 +60,126 @@ a34 = np.array([
     [np.sin(wtg.cone), 0.0, np.cos(wtg.cone)]
 ])
 
-debugIdx = (16, 0, 407)
+debugIdx = (1, 0, 0)
 
 
 
 # ------------------------
 # TIME LOOP
 # ------------------------
-try:
-    for i in range(sim.nSteps):
+for i in range(sim.nSteps):
 
-        # BLADE LOOP
-        for j in range(wtg.blades):
-            sim.theta[j, i + 1] = sim.theta[j, i] + sim.omega * sim.dt
-            a23_blade1 = func.get_a23(sim.theta[j, i + 1])
+    # BLADE LOOP
+    for j in range(wtg.blades):
 
-            # BLADE ELEMENT LOOP
-            for e in range(sim.bladeElements - 1):
-                idx1 = (e, j, i + 1)
-                idx  = (e, j, i)
+        sim.theta[j, i + 1] = sim.theta[j, i] + sim.omega * sim.dt
+        a23_blade1 = func.get_a23(sim.theta[j, i + 1])
 
-                sim.position[:, *idx1] = func.get_position(wtg, sim, a12, a23_blade1, a34).squeeze()
-                V_local = np.array([[0.0, 0.0, wind.V0_z]]).T
+        # BLADE ELEMENT LOOP
+        for e in range(sim.bladeElements - 1):
+            idx1 = (e, j, i + 1)
+            idx  = (e, j, i)
 
-                if wind.hasShear:
-                    V_local[axial, 0] = func.wind_shear(wind, wtg, sim.position[0, *idx1])
+            sim.position[:, *idx1] = func.get_position(wtg, sim, a12, a23_blade1, a34).squeeze()
+            V_local = np.array([[0.0, 0.0, wind.V0_z]]).T
 
-                if idx1 == debugIdx:
-                    hello = "Debug"
+            if wind.hasShear:
+                V_local[axial, 0] = func.wind_shear(wind, wtg, sim.position[0, *idx1])
 
-                if wind.hasTowerEffect:
-                    wtg.update_tower_radius(sim.position[0, *idx1])
-                    wind.Vz = V_local[axial, 0]
-                    V_local, isStagnant = func.tower_model(wind, wtg,
-                                          sim.position[tangt, *idx1],
-                                          sim.position[axial, *idx1])  
-                    if isStagnant:
-                        V_local = sim.windSpeed[:, *idx]
+            if idx == debugIdx:
+                hello = "Debug"
 
-                sim.windSpeed[:, *idx1] = func.go_to_ground_system(a12, a23_blade1, a34,
-                                                                         V_local).squeeze()
-                # sim.windSpeed[: ,*idx1] = V_local.squeeze()
+            if wind.hasTowerEffect:
+                wtg.update_tower_radius(sim.position[0, *idx1])
+                # wind.Vz = V_local[axial, 0]
+                V_local, isStagnant = func.tower_model(wind, wtg,
+                                      sim.position[tangt, *idx1],
+                                      sim.position[axial, *idx1])  
+                if isStagnant:
+                    V_local = sim.windSpeed[:, *idx]
 
-                # BEM stuff - Induced wind
-                aero.relWindSpeed[tangt, *idx1] = (sim.windSpeed[tangt, *idx1] + aero.inducedWind[tangt, *idx] - sim.omega * wtg.bladeData["r"][e] * np.cos(wtg.cone)).squeeze()
-                aero.relWindSpeed[axial, *idx1] = (sim.windSpeed[axial, *idx1] + aero.inducedWind[axial, *idx]).squeeze()
+            sim.windSpeed[:, *idx1] = func.go_to_ground_system(a12, a23_blade1, a34,
+                                                                     V_local).squeeze()
+            # sim.windSpeed[: ,*idx1] = V_local.squeeze()
 
-                try:
-                    flowAngle = func.flow_angle(-aero.relWindSpeed[tangt, *idx1],
-                                                                aero.relWindSpeed[axial, *idx1]) 
-                except ValueError as e:
-                    print(f"Error computing flow angle at idx {idx1}: {e}")
-                    print(f"Vrel_y: {aero.relWindSpeed[1, *idx1]}, Vrel_z: {aero.relWindSpeed[2, *idx1]}")
-                    flowAngle = 0.0
+            # BEM stuff - Induced wind
+            aero.relWindSpeed[tangt, *idx1] = (sim.windSpeed[tangt, *idx1] + aero.inducedWind[tangt, *idx] - sim.omega * wtg.bladeData["r"][e] * np.cos(wtg.cone)).squeeze()
+            aero.relWindSpeed[axial, *idx1] = (sim.windSpeed[axial, *idx1] + aero.inducedWind[axial, *idx]).squeeze()
 
-                aero.flowAngle[*idx1] = flowAngle
+            try:
+                flowAngle = func.flow_angle(-aero.relWindSpeed[tangt, *idx1],
+                                                            aero.relWindSpeed[axial, *idx1]) 
+            except ValueError as err:
+                print(f"Error computing flow angle at idx {idx1}: {err}")
+                print(f"Vrel_y: {aero.relWindSpeed[1, *idx1]}, Vrel_z: {aero.relWindSpeed[2, *idx1]}")
+                flowAngle = 0.0
 
-                # AoA in degrees
-                aero.AoA[*idx1] = np.rad2deg(aero.flowAngle[*idx1]) - (wtg.bladeData["twist"][e] + wtg.pitch0)
+            aero.flowAngle[*idx1] = flowAngle
 
-                # Nan here
-                relWindSpeedMagnitude = np.hypot(aero.relWindSpeed[1, *idx1], aero.relWindSpeed[2, *idx1])
+            # AoA in degrees
+            aero.AoA[*idx1] = np.rad2deg(aero.flowAngle[*idx1]) - (wtg.bladeData["twist"][e] + wtg.pitch0)
 
-                # Read and interpolate lift and drag
-                point = np.atleast_2d((aero.AoA[*idx1], wtg.bladeData["thick"][e]))
-                Cd = func.interpolate_drag(aero, wtg, point)
+            relWindSpeedMagnitude = np.hypot(aero.relWindSpeed[1, *idx1], aero.relWindSpeed[2, *idx1])
 
-                if sim.dynamicStall:
-                    # S. Øye dyn. stall model
-                    cl_inv, f_s, cl_fs = func.interpolate_coeffs_dyn_stall(aero, wtg, point)
+            # Read and interpolate lift and drag
+            point = np.atleast_2d((aero.AoA[*idx1], wtg.bladeData["thick"][e]))
+            Cd = func.interpolate_drag(aero, wtg, point)
 
-                    if idx == (0, 0, 0):
-                        aero.separationFactor[:, :, 0] = f_s
+            if sim.dynamicStall:
+                # S. Øye dyn. stall model
+                cl_inv, f_s, cl_fs = func.interpolate_coeffs_dyn_stall(aero, wtg, point)
 
-                    tau = 4 * wtg.bladeData["chord"][e] / relWindSpeedMagnitude
-                    aero.separationFactor[*idx1] = f_s + (aero.separationFactor[*idx] - f_s) * np.exp(-sim.dt / tau)
-                    Cl = aero.separationFactor[*idx1] * cl_inv + (1 - aero.separationFactor[*idx1]) * cl_fs
+                if idx == (0, 0, 0):
+                    aero.separationFactor[:, 0, 0] = 0.1
 
-                    aero.cl_inv[*idx1] = cl_inv
-                    aero.f_s[*idx1] = f_s
-                    aero.cl_fs[*idx1] = cl_fs
-                else:
-                    # Just steady-state Cl
-                    Cl = func.interpolate_lift(aero, wtg, point)
+                tau = 4 * wtg.bladeData["chord"][e] / relWindSpeedMagnitude
+                aero.separationFactor[*idx1] = f_s + (aero.separationFactor[*idx] - f_s) * np.exp(-sim.dt / tau)
+                Cl = aero.separationFactor[*idx1] * cl_inv + (1 - aero.separationFactor[*idx1]) * cl_fs
 
-                # Assign coefficients
-                aero.Cl[*idx1] = Cl
-                aero.Cd[*idx1] = Cd
+                aero.cl_inv[*idx1] = cl_inv
+                aero.f_s[*idx1] = f_s
+                aero.cl_fs[*idx1] = cl_fs
 
-                # Compute element Lift and Drag
-                lift = 0.5 * wind.density * relWindSpeedMagnitude**2 * Cl * wtg.bladeData["chord"][e]
-                drag = 0.5 * wind.density * relWindSpeedMagnitude**2 * Cd * wtg.bladeData["chord"][e]
+            else:
+                # Just steady-state Cl
+                Cl = func.interpolate_lift(aero, wtg, point)
 
-                aero.lift[*idx1] = lift
-                aero.drag[*idx1] = drag
+            # Assign coefficients
+            aero.Cl[*idx1] = Cl
+            aero.Cd[*idx1] = Cd
 
-                # Rotate them into rotor plane (by the pitch angle)
-                pNormal =  lift * np.cos(aero.flowAngle[*idx1]) + drag * np.sin(aero.flowAngle[*idx1])
-                pTangent = -lift * np.sin(aero.flowAngle[*idx1]) + drag * np.cos(aero.flowAngle[*idx1])
+            # Compute element Lift and Drag
+            lift = 0.5 * wind.density * abs(relWindSpeedMagnitude)**2 * Cl * wtg.bladeData["chord"][e]
+            drag = 0.5 * wind.density * abs(relWindSpeedMagnitude)**2 * Cd * wtg.bladeData["chord"][e]
+            aero.lift[*idx1] = lift
+            aero.drag[*idx1] = drag
 
-                aero.normalForce[*idx1] = pNormal
-                aero.tangentialForce[*idx1] = pTangent
+            # Rotate them into rotor plane (by the pitch angle)
+            pNormal =  lift * np.cos(aero.flowAngle[*idx1]) + drag * np.sin(aero.flowAngle[*idx1])
+            pTangent = -lift * np.sin(aero.flowAngle[*idx1]) + drag * np.cos(aero.flowAngle[*idx1])
+            aero.normalForce[*idx1] = pNormal
+            aero.tangentialForce[*idx1] = pTangent
 
-                # ---- DYNAMIC INFLOW ----
-                # Compute Quasi-Steady induced winds
-                # aero.inducedWindQS[1:, *idx1] = ind.compute_quasi_steady_induction(aero, wtg, wind, sim, idx1).squeeze()
+            # ---- DYNAMIC INFLOW ----
+            ind.compute_induction(
+                aero, sim, wtg, wind,
+                idx1
+            )
+            end_inner_loop = "Done"
 
-                end_inner_loop = "Done"
-except FloatingPointError as err:
-    print(f"Floating point error during BEM calculation: {err}\n at index e={e}, b={j}, t={i}")
-    # pdb.set_trace()
+            if e in [1, 2, 3, 15, 16]:
+                logging.info(f"--- BEM DEBUG INFO at element {e}, blade {j}, time step {i+1} ---")
+                logging.info(f"Axial rel wsp: {aero.relWindSpeed[axial, *idx1]:.3f} m/s | ")
+                logging.info(f"Tangt rel wsp: {aero.relWindSpeed[tangt, *idx1]:.3f} m/s | ")
+                logging.info(f"Induced axial: {aero.inducedWind[axial, *idx1]:.3f} m/s | ")
+                logging.info(f"Induced tangt: {aero.inducedWind[tangt, *idx1]:.3f} m/s | ")
+                logging.info(f"Flow angle: {np.rad2deg(aero.flowAngle[*idx1]):.3f} deg | ")
+                logging.info(f"AoA: {aero.AoA[*idx1]:.3f} deg | ")
+                logging.info(f"Cl: {aero.Cl[*idx1]:.3f} | Cd: {aero.Cd[*idx1]:.3f} | ")
+                logging.info("-----")
+                logging.info("")
+
+                   
 
 
 
@@ -237,10 +251,10 @@ plt.show()
 
 
 plt.figure()
-plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[2, 5, 0, 1:], label=r'Vz - E5')
-plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[1, 5, 0, 1:], label=r'Vy - E5')
-plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[2, 15, 0, 1:], label=r'Vz - E15', color='aqua')
-plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[1, 15, 0, 1:], label=r'Vy - E15', color='orangered')
+plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[2, 0, 0, 1:], label=r'Vz - E5')
+plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[1, 0, 0, 1:], label=r'Vy - E5')
+# plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[2, 15, 0, 1:], label=r'Vz - E15', color='aqua')
+# plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[1, 15, 0, 1:], label=r'Vy - E15', color='orangered')
 plt.legend()
 plt.xlabel("Revolutions")
 plt.ylabel("Wind Speed (m/s)")
@@ -248,8 +262,8 @@ plt.grid()
 plt.show()
 
 plt.figure()
-plt.plot(wtg.bladeData["r"], aero.relWindSpeed[tangt, :, 0, 406], label="Vy at t=1.601s")
-plt.plot(wtg.bladeData["r"], aero.relWindSpeed[axial, :, 0, 406], label="Vz at t=1.601s")
+plt.plot(sim.times[:], aero.relWindSpeed[tangt, 16, 0, :], label="Vy at t=1.601s")
+plt.plot(sim.times[:], aero.relWindSpeed[axial, 16, 0, :], label="Vz at t=1.601s")
 plt.xlabel("Radius (m)")
 plt.ylabel("Wind Speed (m/s)")
 plt.title("Wind speed distribution along the blade at t=1.601s")
@@ -267,14 +281,14 @@ plt.show()
 
 
 fig, ax = plt.subplots(2, 1, sharex=True)
-ax[0].plot(wtg.bladeData["r"], aero.normalForce[:, 0, 1601], label="Lift")
-ax[0].plot(wtg.bladeData["r"], aero.tangentialForce[:, 0, 1601], label="Drag")
+ax[0].plot(wtg.bladeData["r"], aero.normalForce[:, 0, 351], label="Lift")
+ax[0].plot(wtg.bladeData["r"], aero.tangentialForce[:, 0, 351], label="Drag")
 ax[0].set_ylabel("Force per unit span (N/m)")
 ax[0].legend()
 ax[0].grid()
 
-ax[1].plot(wtg.bladeData["r"], aero.AoA[:, 0, 1601], label="AoA", color='C1')
-ax[1].plot(wtg.bladeData["r"], np.rad2deg(aero.flowAngle[:, 0, 1601]), label="Flow Angle", color='C2')
+ax[1].plot(wtg.bladeData["r"], aero.AoA[:, 0, 351], label="AoA", color='C1')
+ax[1].plot(wtg.bladeData["r"], np.rad2deg(aero.flowAngle[:, 0, 351]), label="Flow Angle", color='C2')
 ax[1].set_xlabel("Radius (m)")
 ax[1].set_ylabel("Angle (deg)")
 ax[1].legend()
@@ -282,11 +296,11 @@ ax[1].grid()
 plt.show()
 
 plt.figure()
-plt.plot(wtg.bladeData["r"], aero.separationFactor[:, 0, 1601], label="Separation Factor f_s")
-plt.plot(wtg.bladeData["r"], aero.cl_inv[:, 0, 1601], label="Cl_inv")
-plt.plot(wtg.bladeData["r"], aero.cl_fs[:, 0, 1601], label="Cl_fs")
-plt.plot(wtg.bladeData["r"], aero.Cl[:, 0, 1601], label="Cl")
-plt.plot(wtg.bladeData["r"], aero.Cd[:, 0, 1601], label="Cd")
+plt.plot(wtg.bladeData["r"], aero.separationFactor[:, 0, 351], label="Separation Factor f_s")
+plt.plot(wtg.bladeData["r"], aero.cl_inv[:, 0, 351], label="Cl_inv")
+plt.plot(wtg.bladeData["r"], aero.cl_fs[:, 0, 351], label="Cl_fs")
+plt.plot(wtg.bladeData["r"], aero.Cl[:, 0, 351], label="Cl")
+plt.plot(wtg.bladeData["r"], aero.Cd[:, 0, 351], label="Cd")
 plt.xlabel("Radius (m)")
 plt.ylabel("Coefficients")
 plt.legend()
@@ -306,3 +320,7 @@ plt.show()
 
 np.mean(aero.Cl[5, 0, : ])
 np.mean(aero.Cl[-2, 0, : ])
+
+np.mean(aero.relWindSpeed[axial, 5, 0, : ])
+np.mean(aero.relWindSpeed[tangt, 5, 0, : ])
+

@@ -41,6 +41,12 @@ def go_to_ground_system(a12: np.ndarray, a23: np.ndarray, a34: np.ndarray,
                         input_array: np.ndarray) -> np.ndarray:
     return (a34 @ a23 @ a12) @ input_array
 
+def rpm_to_rads(rpm: float) -> float:
+    return rpm * 2 * np.pi / 60.0
+
+def rads_to_rpm(rads: float) -> float:
+    return rads * 60.0 / (2 * np.pi)
+
 
 # –––––––––––––––––––––––
 # Flow
@@ -53,7 +59,7 @@ def check_element_in_tower(wtg: WTG, x: float) -> bool:
     return True if x > wtg.H else False
 
 
-def tower_model(wind: Wind, wtg: WTG, y: float, z: float):
+def tower_model(wind: Wind, wtg: WTG, y: float, z: float, eps: float = 1e-6):
     r = np.hypot(y, z)
     c, s = z/r, y/r  
     
@@ -64,7 +70,6 @@ def tower_model(wind: Wind, wtg: WTG, y: float, z: float):
     Vz =  (z/r) * Vr + (y/r) * Vt
     Vx =  0.0
 
-    eps = 1e-8
     is_stagnant = (abs(Vx) < eps and abs(Vy) < eps and abs(Vz) < eps)
     return np.array([[Vx, Vy, Vz]]).T, is_stagnant
 
