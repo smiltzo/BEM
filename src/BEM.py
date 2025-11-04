@@ -1,16 +1,14 @@
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
-from pathlib import Path
 import BEM_utils as func
 import induction_module as ind
-from BEM_dataclasses import WTG, Wind, Simulation, AeroData
-import warnings
+from BEM_dataclasses import WTG, Simulation, AeroData, RotorForces
+from  Field.wind import Wind, WindTurbulent
 import logging
 from datetime import datetime
 
-debugRunId = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-logging.basicConfig(filename=f"Tmp/debug_log_{debugRunId}.txt", level=logging.INFO, filemode='w')
+# debugRunId = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# logging.basicConfig(filename=f"Tmp/debug_log_{debugRunId}.txt", level=logging.INFO, filemode='w')
 
 # np.seterr(all='raise')
 # warnings.filterwarnings("error")
@@ -20,8 +18,9 @@ wtg = WTG()
 sim = Simulation()
 wind = Wind()
 aero = AeroData(wtg, sim, [f"FFA-W3-{n}.csv" for n in wtg.thicknesses])
+rotor = RotorForces(sim)
 
-wind.hasTowerEffect = True
+wind.hasTowerEffect = False
 wind.hasShear = True
 wtg.yaw = np.deg2rad(20.0)
 
@@ -60,7 +59,7 @@ a34 = np.array([
     [np.sin(wtg.cone), 0.0, np.cos(wtg.cone)]
 ])
 
-debugIdx = (1, 0, 0)
+debugIdx = (4, 0, 350)
 
 
 
@@ -81,17 +80,17 @@ for i in range(sim.nSteps):
             idx  = (e, j, i)
 
             sim.position[:, *idx1] = func.get_position(wtg, sim, a12, a23_blade1, a34).squeeze()
-            V_local = np.array([[0.0, 0.0, wind.V0_z]]).T
+            V_local = np.array([[0.0, 0.0, sim.windSpeed[axial, *idx1]]]).T
 
             if wind.hasShear:
                 V_local[axial, 0] = func.wind_shear(wind, wtg, sim.position[0, *idx1])
 
             if idx == debugIdx:
+                print(f"\n We are at index {idx}\n")
                 hello = "Debug"
 
             if wind.hasTowerEffect:
                 wtg.update_tower_radius(sim.position[0, *idx1])
-                # wind.Vz = V_local[axial, 0]
                 V_local, isStagnant = func.tower_model(wind, wtg,
                                       sim.position[tangt, *idx1],
                                       sim.position[axial, *idx1])  
@@ -107,8 +106,7 @@ for i in range(sim.nSteps):
             aero.relWindSpeed[axial, *idx1] = (sim.windSpeed[axial, *idx1] + aero.inducedWind[axial, *idx]).squeeze()
 
             try:
-                flowAngle = func.flow_angle(-aero.relWindSpeed[tangt, *idx1],
-                                                            aero.relWindSpeed[axial, *idx1]) 
+                flowAngle = np.arctan2(aero.relWindSpeed[axial, *idx1], -aero.relWindSpeed[tangt, *idx1])
             except ValueError as err:
                 print(f"Error computing flow angle at idx {idx1}: {err}")
                 print(f"Vrel_y: {aero.relWindSpeed[1, *idx1]}, Vrel_z: {aero.relWindSpeed[2, *idx1]}")
@@ -156,7 +154,7 @@ for i in range(sim.nSteps):
 
             # Rotate them into rotor plane (by the pitch angle)
             pNormal =  lift * np.cos(aero.flowAngle[*idx1]) + drag * np.sin(aero.flowAngle[*idx1])
-            pTangent = -lift * np.sin(aero.flowAngle[*idx1]) + drag * np.cos(aero.flowAngle[*idx1])
+            pTangent = lift * np.sin(aero.flowAngle[*idx1]) - drag * np.cos(aero.flowAngle[*idx1])
             aero.normalForce[*idx1] = pNormal
             aero.tangentialForce[*idx1] = pTangent
 
@@ -167,160 +165,38 @@ for i in range(sim.nSteps):
             )
             end_inner_loop = "Done"
 
-            if e in [1, 2, 3, 15, 16]:
-                logging.info(f"--- BEM DEBUG INFO at element {e}, blade {j}, time step {i+1} ---")
-                logging.info(f"Axial rel wsp: {aero.relWindSpeed[axial, *idx1]:.3f} m/s | ")
-                logging.info(f"Tangt rel wsp: {aero.relWindSpeed[tangt, *idx1]:.3f} m/s | ")
-                logging.info(f"Induced axial: {aero.inducedWind[axial, *idx1]:.3f} m/s | ")
-                logging.info(f"Induced tangt: {aero.inducedWind[tangt, *idx1]:.3f} m/s | ")
-                logging.info(f"Flow angle: {np.rad2deg(aero.flowAngle[*idx1]):.3f} deg | ")
-                logging.info(f"AoA: {aero.AoA[*idx1]:.3f} deg | ")
-                logging.info(f"Cl: {aero.Cl[*idx1]:.3f} | Cd: {aero.Cd[*idx1]:.3f} | ")
-                logging.info("-----")
-                logging.info("")
+    # Compute rotor forces and torque
+    Fn = aero.normalForce[:, :, i + 1]
+    Ft = aero.tangentialForce[:, :, i + 1]
 
-                   
+    dT = Fn * wtg.bladeData["dr"][:, None]
+    dQ = Ft * (wtg.bladeData["r"] * wtg.bladeData["dr"])[:, None]
 
+    T = wtg.blades * np.mean(np.sum(dT, axis=0))
+    Q = wtg.blades * np.mean(np.sum(dQ, axis=0))
+    P = Q * sim.omega
 
+    rotor.CT[i+1] = T / (0.5 * wind.density * np.pi * wtg.R**2 * sim.windSpeed[2, *idx1]**2)
+    rotor.CQ[i+1] = Q / (0.5 * wind.density * np.pi * wtg.R**2 * sim.windSpeed[2, *idx1]**2 * wtg.R)
+    rotor.CP[i+1] = P / (0.5 * wind.density * np.pi * wtg.R**2 * sim.windSpeed[2, *idx1]**3)
+
+    rotor.Thrust[i+1], rotor.Torque[i+1], rotor.Power[i+1] = T, Q, P
 
 
 calculations = "Done"
-# # Forces, moments and power calculation
-# shape = (wtg.blades, sim.nSteps + 1)
+# Forces, moments and power calculation
 
-# F_normal = np.zeros(shape)
-# F_tangent = np.zeros(shape)
-# Thrust = np.zeros(shape)
-# Torque = np.zeros(shape)
-
-# dr = np.gradient(wtg.bladeData["r"])
-# for b in range(wtg.blades):
-#     F_normal[b, :] = np.sum(aero.normalForce[:, b, :] * dr[:, None], axis=0)
-#     F_tangent[b, :] = np.sum(aero.tangentialForce[:, b, :] * dr[:, None], axis=0)
-
-#     Thrust[b, :] = F_normal[b, :]
-#     Torque[b, :] = np.sum(aero.tangentialForce[:, b, :] * wtg.bladeData["r"][:, None] * dr[:, None], axis=0)
-
-# loads = {
-#     "F_normal": F_normal,
-#     "F_tangent": F_tangent,
-#     "Thrust": Thrust,
-#     "Torque": Torque,
-# }
-
-# # Dump results to temporary CSV
-# output_path = Path("Tmp/debug_results1.csv")
-# # Store everything into dictionary first
-# results_dict = {
-#     "position_x": sim.position[0].reshape(-1),
-#     "position_y": sim.position[1].reshape(-1),
-#     "position_z": sim.position[2].reshape(-1),
-#     "windSpeed_x": sim.windSpeed[0].reshape(-1),
-#     "windSpeed_y": sim.windSpeed[1].reshape(-1),
-#     "windSpeed_z": sim.windSpeed[2].reshape(-1),
-#     "AoA": aero.AoA.reshape(-1),
-#     "flowAngle": aero.flowAngle.reshape(-1),
-#     "lift": aero.lift.reshape(-1),
-#     "drag": aero.drag.reshape(-1),
-#     "normalForce": aero.normalForce.reshape(-1),
-#     "tangentialForce": aero.tangentialForce.reshape(-1),
-#     "inducedWind_y": aero.inducedWind[1].reshape(-1),
-#     "inducedWind_z": aero.inducedWind[2].reshape(-1),
-#     "F_normal": F_normal.reshape(-1),
-#     "F_tangent": F_tangent.reshape(-1),
-#     "Thrust": Thrust.reshape(-1),
-#     "Torque": Torque.reshape(-1),
-# }
-# df = pd.DataFrame(results_dict, columns=results_dict.keys(), index=None)
-# df.to_csv(output_path, index=False)
-
-# results = "Stored"
 
 # ------------------------
 # PLOT RESULTS
 # ------------------------
-plt.figure()
-plt.plot(sim.position[1, 0, 0, 1:], sim.position[0, 0, 0, 1:], label="Blade tip path")
-plt.axis("equal")
-plt.xlabel("x [m]")
-plt.ylabel("y [m]")
-plt.title("Blade tip trajectory")
-plt.grid()
-plt.legend()
-plt.show()
+from plotter import Plotter
+plot = Plotter(wtg, sim, aero, wind, rotor)
 
-
-plt.figure()
-plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[2, 0, 0, 1:], label=r'Vz - E5')
-plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[1, 0, 0, 1:], label=r'Vy - E5')
-# plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[2, 15, 0, 1:], label=r'Vz - E15', color='aqua')
-# plt.plot(sim.theta[0, 1:]/(np.pi*2), aero.relWindSpeed[1, 15, 0, 1:], label=r'Vy - E15', color='orangered')
-plt.legend()
-plt.xlabel("Revolutions")
-plt.ylabel("Wind Speed (m/s)")
-plt.grid()
-plt.show()
-
-plt.figure()
-plt.plot(sim.times[:], aero.relWindSpeed[tangt, 16, 0, :], label="Vy at t=1.601s")
-plt.plot(sim.times[:], aero.relWindSpeed[axial, 16, 0, :], label="Vz at t=1.601s")
-plt.xlabel("Radius (m)")
-plt.ylabel("Wind Speed (m/s)")
-plt.title("Wind speed distribution along the blade at t=1.601s")
-plt.legend()
-plt.grid()
-plt.show()
-
-plt.figure()
-plt.plot(sim.times[1:], np.rad2deg(aero.flowAngle[5, 0, 1:]), label="Flow Angle")
-plt.xlabel("Time (s)")
-plt.ylabel("Flow Angle (deg)")
-plt.grid()
-plt.legend()
-plt.show()
-
-
-fig, ax = plt.subplots(2, 1, sharex=True)
-ax[0].plot(wtg.bladeData["r"], aero.normalForce[:, 0, 351], label="Lift")
-ax[0].plot(wtg.bladeData["r"], aero.tangentialForce[:, 0, 351], label="Drag")
-ax[0].set_ylabel("Force per unit span (N/m)")
-ax[0].legend()
-ax[0].grid()
-
-ax[1].plot(wtg.bladeData["r"], aero.AoA[:, 0, 351], label="AoA", color='C1')
-ax[1].plot(wtg.bladeData["r"], np.rad2deg(aero.flowAngle[:, 0, 351]), label="Flow Angle", color='C2')
-ax[1].set_xlabel("Radius (m)")
-ax[1].set_ylabel("Angle (deg)")
-ax[1].legend()
-ax[1].grid()
-plt.show()
-
-plt.figure()
-plt.plot(wtg.bladeData["r"], aero.separationFactor[:, 0, 351], label="Separation Factor f_s")
-plt.plot(wtg.bladeData["r"], aero.cl_inv[:, 0, 351], label="Cl_inv")
-plt.plot(wtg.bladeData["r"], aero.cl_fs[:, 0, 351], label="Cl_fs")
-plt.plot(wtg.bladeData["r"], aero.Cl[:, 0, 351], label="Cl")
-plt.plot(wtg.bladeData["r"], aero.Cd[:, 0, 351], label="Cd")
-plt.xlabel("Radius (m)")
-plt.ylabel("Coefficients")
-plt.legend()
-plt.grid()
-plt.show()
-
-
-plt.figure()
-plt.plot(sim.times[1:], aero.Cl[5, 0, 1:], label="Element 5")
-plt.plot(sim.times[1:], aero.Cl[-2, 0, 1:], label="Blade tip element")
-plt.grid()
-plt.xlabel("Time (s)")
-plt.ylabel("Cl")
-plt.legend()
-plt.show()
-
-
-np.mean(aero.Cl[5, 0, : ])
-np.mean(aero.Cl[-2, 0, : ])
-
-np.mean(aero.relWindSpeed[axial, 5, 0, : ])
-np.mean(aero.relWindSpeed[tangt, 5, 0, : ])
+figspace = {
+    "title": "Thrust and Torque over Time",
+    "ylabel": "Thrust (N) / Torque (Nm)"
+}
+plot.plot_timeseries(["Thrust", "Torque"], figspace)
+plot.plot_spanwise(["lift", "drag"], (16, 0, 349), {"title": "Spanwise Lift and Drag", "ylabel": "Force per unit length (N/m)"})
 

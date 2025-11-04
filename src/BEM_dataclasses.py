@@ -27,8 +27,9 @@ class WTG:
     bladeData: Dict = field(init=False)
 
     def __post_init__(self):
-        df = pd.read_csv("Data/bladedat.csv", sep=',', header=0)
+        df = pd.read_csv("Data/Airfoils/bladedat.csv", sep=',', header=0)
         self.bladeData = {col: np.array(values) for col, values in df.to_dict(orient='list').items()}
+        self.bladeData["dr"] = np.gradient(np.asarray(self.bladeData["r"]))
 
 
     def update_tower_radius(self, r: float) -> None:
@@ -36,26 +37,6 @@ class WTG:
             self.towerRadius = 0.0
         else:
             self.towerRadius = 3.32
-
-
-@dataclass
-class Wind:
-
-    V0_x: float = 0.0
-    V0_y: float = 0.0
-    V0_z: float = 9.0
-
-    # Instantaneous wind components in ground system
-    Vx: float = 0.0
-    Vy: float = 0.0
-    Vz: float = 9.0
-
-    # Atmosphere
-    density: float = 1.225 # kg/m^3
-    hasShear: bool = True
-    hasTowerEffect: bool = True
-    alpha: float = 0.141   # (-)
-    V0Ref: float = 10.0 # m/s
 
 
 
@@ -81,8 +62,6 @@ class Simulation:
     windSpeed: np.ndarray = field(init=False)   # shape (3, bladeElements, nBlades, nSteps+1)
 
     dynamicInduction: float = field(init=False)
-
-
 
     def __post_init__(self):
         self.nSteps = int(self.duration / self.dt)
@@ -140,17 +119,10 @@ class AeroData:
     cl_inv: np.ndarray = field(init=False)
     f_s: np.ndarray = field(init=False)
     cl_fs: np.ndarray = field(init=False)
+    separationFactor: np.ndarray = field(init=False)
 
     normalForce: np.ndarray = field(init=False)
     tangentialForce: np.ndarray = field(init=False)
-
-    separationFactor: np.ndarray = field(init=False)
-
-    # Dynamic Wake induction time constants
-    # tau1: float = field(init=False)
-    # tau2: float = field(init=False)
-
-    # pitch = np.ndarray = field(init=False)
 
     airfoils: Dict[str, np.ndarray] = field(init=False)
 
@@ -180,10 +152,8 @@ class AeroData:
         self.Cd = np.zeros(scalar_shape)
         self.Cl = np.zeros(scalar_shape)
         
-
         self.normalForce = np.zeros(scalar_shape)
         self.tangentialForce = np.zeros(scalar_shape)
-
 
         if self.sim.dynamicStall:
             self.separationFactor = np.zeros(scalar_shape)
@@ -193,7 +163,7 @@ class AeroData:
 
         try:
             # Read all files and combine them into one DataFrame (side-by-side)
-            dfs = [pd.read_csv(f"Data/{f}", sep=",", header=0) for f in self.airfoilFiles]
+            dfs = [pd.read_csv(f"Data/Airfoils/{f}", sep=",", header=0) for f in self.airfoilFiles]
             df_all = pd.concat(dfs, axis=1, ignore_index=True)
 
             _AoA      = dfs[0].iloc[:, 0].to_numpy()  
@@ -211,3 +181,24 @@ class AeroData:
         keys = ["AoA", "Cl", "Cd", "Cm", "f_s", "Cl_inv", "Cl_fs"]
         self.airfoils = {key: array for key, array in zip(keys, [_AoA, _Cl, _Cd, _Cm, _f_s, _Cl_inv, _Cl_fs])}
 
+@dataclass
+class RotorForces:
+
+    sim: "Simulation"
+
+    Thrust: np.ndarray = field(init=False)  # Thrust (N)
+    Torque: np.ndarray = field(init=False)  # Torque (Nm)
+    Power: np.ndarray = field(init=False)  # Power (W)
+
+    CT: np.ndarray = field(init=False)  # Thrust coefficient
+    CQ: np.ndarray = field(init=False)  # Torque coefficient
+    CP: np.ndarray = field(init=False)  # Power coefficient
+
+    def __post_init__(self):
+        self.Thrust = np.zeros(self.sim.nSteps + 1)
+        self.Torque = np.zeros(self.sim.nSteps + 1)
+        self.Power = np.zeros(self.sim.nSteps + 1)
+
+        self.CT = np.zeros(self.sim.nSteps + 1)
+        self.CQ = np.zeros(self.sim.nSteps + 1)
+        self.CP = np.zeros(self.sim.nSteps + 1)

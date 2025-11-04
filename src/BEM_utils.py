@@ -6,14 +6,11 @@ from scipy.interpolate import RegularGridInterpolator
 # –––––––––––––––––––––––
 # Reference systems
 # –––––––––––––––––––––––
-def get_a23(theta: float) -> np.ndarray:
-    """
-    Rotation matrix for azimuthal rotation of the blade (shaft to blade).
-    """
+def get_a23(theta):
     return np.array([
-        [np.cos(theta),  np.sin(theta),  0.0],
-        [-np.sin(theta), np.cos(theta),  0.0],
-        [0.0,             0.0,           1.0]
+        [ np.cos(theta),  -np.sin(theta), 0],
+        [np.sin(theta),  np.cos(theta), 0],
+        [ 0, 0, 1]
     ])
 
 
@@ -74,20 +71,7 @@ def tower_model(wind: Wind, wtg: WTG, y: float, z: float, eps: float = 1e-6):
     return np.array([[Vx, Vy, Vz]]).T, is_stagnant
 
 
-def flow_angle(v_axial, v_tangential, eps=1e-5):
-    """
-    Returns flow angle in radians. Safe for near-zero velocities.
-    v_axial = axial component (usually negative for incoming)
-    v_tangential = tangential component
-    """
-    # Check for weird values like NaN or Inf
-    if not np.isfinite(v_axial) or not np.isfinite(v_tangential):
-        raise ValueError(f"Non-finite velocity passed to flow_angle: {v_axial}, {v_tangential}")
-
-    # If both components are extremely small, return 0 (or a physically-motivated fallback)
-    if abs(v_axial) < eps and abs(v_tangential) < eps:
-        return 0.0
-
+def flow_angle(v_axial, v_tangential) -> float:
     return np.arctan2(v_axial, v_tangential)
 
 
