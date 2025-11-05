@@ -1,19 +1,26 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import Optional
-from BEM_dataclasses import WTG, Wind, Simulation, AeroData, RotorForces
+from dataclassesBEM import WTG, Simulation, AeroData, RotorForces
+from wind import Wind
 
 
 class Plotter:
     def __init__(self,
                  wtg: WTG, sim: Simulation,
-                 aero: AeroData, wind: Wind, rotor: RotorForces):
+                 aero: AeroData, wind: Wind, rotor: RotorForces,
+                 style: str = 'default'):
         self.wtg = wtg
         self.sim = sim
         self.aero = aero
         self.wind = wind
         self.rotor = rotor
         self._get_all_quantities()
+
+        styles = ['default', 'custom', 'custom-dark', 'seaborn', 'ggplot']
+        if style not in styles:
+            raise ValueError(f"Style '{style}' not recognized. Available styles: {styles}")
+        plt.style.use(style)
 
     def _setup_figure(self, title: str, xlabel: str, ylabel: str, figsize=(8,4.5)) -> plt.Figure:
         fig, ax = plt.subplots()
@@ -47,9 +54,11 @@ class Plotter:
 
             # From AeroData dataclass
             "relWindSpeed": self.aero.relWindSpeed,
-            "flowAngle": self.aero.flowAngle,
+            "flowAngle": np.rad2deg(self.aero.flowAngle),
             "AoA": self.aero.AoA,
             "inducedWind": self.aero.inducedWind,
+            "inducedWindQS": self.aero.inducedWindQS,
+            "inducedWindInt": self.aero.inducedWindInt,
             "lift": self.aero.lift,
             "drag": self.aero.drag,
             "Cd": self.aero.Cd,
@@ -81,7 +90,7 @@ class Plotter:
 
         for quantity in quantities:
             if not quantity in self.results.keys():
-                raise AttributeError(f"Results has no attribute '{quantity}'.")
+                raise AttributeError(f"Results has no attribute '{quantity}'.\nChoose one of {list(self.results.keys())}.")
 
             data = self.results[quantity]
             dataDims = data.ndim
@@ -123,7 +132,7 @@ class Plotter:
 
         for quantity in quantities:
             if not quantity in self.results.keys():
-                raise AttributeError(f"Results has no attribute '{quantity}'.")
+                raise AttributeError(f"Results has no attribute '{quantity}'.\nChoose one of {list(self.results.keys())}.")
 
             data = self.results[quantity]
             dataDims = data.ndim
@@ -139,7 +148,7 @@ class Plotter:
                 raise ValueError(f"Unsupported data dimension {dataDims} for quantity '{quantity}'.")
 
             # x-axis: spanwise index
-            x = np.arange(y.shape[0])
+            x = np.linspace(0, self.wtg.R, y.shape[0])
             ax.plot(x, y, label=quantity)
 
         ax.legend()

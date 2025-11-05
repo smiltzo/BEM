@@ -1,0 +1,67 @@
+# MATLAB R2014b+ style for Matplotlib
+# -----------------------------------
+# Clean modern MATLAB-like appearance
+
+##### FIGURE & FONT #####
+figure.figsize : 6, 4
+figure.facecolor : white
+figure.dpi : 100
+
+font.family : sans-serif
+font.sans-serif : Arial
+font.size : 12
+
+##### AXES #####
+axes.titlesize : 14
+axes.labelsize : 12
+axes.edgecolor : black
+axes.linewidth : 0.8
+axes.grid : True
+axes.facecolor : white
+axes.labelpad : 4
+axes.titlepad : 8
+
+# MATLAB R2014b+ color order (must be one line)
+# axes.prop_cycle : cycler('color', [(0.000, 0.447, 0.741),
+#                                    (0.850, 0.325, 0.098),
+#                                    (0.929, 0.694, 0.125),
+#                                    (0.494, 0.184, 0.556),
+#                                    (0.466, 0.674, 0.188),
+#                                    (0.301, 0.745, 0.933),
+#                                    (0.635, 0.078, 0.184)])
+
+##### GRID #####
+grid.color : 0.85
+grid.linestyle : :
+grid.linewidth : 0.8
+grid.alpha : 1.0
+
+##### LINES #####
+lines.linewidth : 1.8
+lines.markersize : 6
+lines.markeredgewidth : 0.5
+lines.solid_capstyle : round
+lines.antialiased : True
+
+##### LEGEND #####
+legend.fontsize : 10
+legend.frameon : False
+legend.handlelength : 2.0
+legend.handletextpad : 0.8
+
+##### TICKS #####
+xtick.direction : in
+ytick.direction : in
+xtick.top : False
+ytick.right : False
+xtick.labelsize : 10
+ytick.labelsize : 10
+xtick.major.size : 4
+ytick.major.size : 4
+xtick.minor.visible : False
+ytick.minor.visible : False
+
+##### SAVING #####
+savefig.dpi : 300
+savefig.facecolor : white
+savefig.bbox : tight

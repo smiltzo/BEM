@@ -1,5 +1,6 @@
 import numpy as np
-from BEM_dataclasses import WTG, Wind, Simulation, AeroData
+from dataclassesBEM import WTG, Simulation, AeroData
+from wind import Wind
 from typing import List
 from scipy.interpolate import RegularGridInterpolator
 
@@ -8,8 +9,8 @@ from scipy.interpolate import RegularGridInterpolator
 # –––––––––––––––––––––––
 def get_a23(theta):
     return np.array([
-        [ np.cos(theta),  -np.sin(theta), 0],
-        [np.sin(theta),  np.cos(theta), 0],
+        [ np.cos(theta),  np.sin(theta), 0],
+        [-np.sin(theta),  np.cos(theta), 0],
         [ 0, 0, 1]
     ])
 
@@ -33,7 +34,6 @@ def go_to_blade_system(a12: np.ndarray, a23: np.ndarray, a34: np.ndarray,
                         input_array: np.ndarray) -> np.ndarray:
     return (a34 @ a23 @ a12).T @ input_array
 
-
 def go_to_ground_system(a12: np.ndarray, a23: np.ndarray, a34: np.ndarray,
                         input_array: np.ndarray) -> np.ndarray:
     return (a34 @ a23 @ a12) @ input_array
@@ -49,7 +49,7 @@ def rads_to_rpm(rads: float) -> float:
 # Flow
 # –––––––––––––––––––––––
 def wind_shear(wind: Wind, wtg: WTG, x: float):
-    return wind.V0Ref * (x / wtg.H) ** wind.alpha if wind.alpha > 0 else wind.V0Ref
+    return wind.Vz * (x / wtg.H) ** wind.alpha if wind.alpha > 0 else wind.V0Ref
 
 
 def check_element_in_tower(wtg: WTG, x: float) -> bool:
@@ -68,7 +68,7 @@ def tower_model(wind: Wind, wtg: WTG, y: float, z: float, eps: float = 1e-6):
     Vx =  0.0
 
     is_stagnant = (abs(Vx) < eps and abs(Vy) < eps and abs(Vz) < eps)
-    return np.array([[Vx, Vy, Vz]]).T, is_stagnant
+    return np.array([Vx, Vy, Vz]), is_stagnant
 
 
 def flow_angle(v_axial, v_tangential) -> float:

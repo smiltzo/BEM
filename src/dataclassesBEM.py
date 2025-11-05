@@ -40,6 +40,7 @@ class WTG:
 
 
 
+
 @dataclass
 class Simulation:
     """Simulation parameters and time/state arrays for multi-blade FEM/BEM solver."""
@@ -51,7 +52,7 @@ class Simulation:
 
     # Some integers
     nBlades: int = 3
-    bladeElements: int = 18
+    bladeElements: int = 50
 
     # Derived arrays
     nSteps: int = field(init=False)

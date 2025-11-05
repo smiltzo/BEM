@@ -1,9 +1,8 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import BEM_utils as func
-import induction_module as ind
-from BEM_dataclasses import WTG, Simulation, AeroData, RotorForces
-from  Field.wind import Wind, WindTurbulent
+import utils as func
+import induction as ind
+from dataclassesBEM import WTG, Simulation, AeroData, RotorForces
+from  wind import Wind, WindTurbulent
 import logging
 from datetime import datetime
 
@@ -14,18 +13,32 @@ from datetime import datetime
 # warnings.filterwarnings("error")
 
 # Dataclasses
-wtg = WTG()
-sim = Simulation()
-wind = Wind()
+wtg = WTG(
+    pitch0= 0.0
+)
+sim = Simulation(
+    duration = 300.0
+)
 aero = AeroData(wtg, sim, [f"FFA-W3-{n}.csv" for n in wtg.thicknesses])
 rotor = RotorForces(sim)
 
-wind.hasTowerEffect = False
-wind.hasShear = True
 wtg.yaw = np.deg2rad(20.0)
-
 tangt = aero.TANGENTIAL
 axial = aero.AXIAL
+
+# Load turbulence box
+wind = WindTurbulent(
+    isTurbulent=True,
+    hasShear = False,
+    hasTowerEffect = False,
+)
+
+if wind.isTurbulent:
+    wind.load_mann_box("Data/Turb/sim1.bin")
+    wind.generate_turbulent_wind(y_idx=16, z_idx=16)
+    wind.plot_contour_at_time(150)
+    wind.plot_psd_at_point(y_idx=16, z_idx=16)
+
 
 # ------------------------
 # TRANSFORMATION MATRICES
@@ -59,7 +72,6 @@ a34 = np.array([
     [np.sin(wtg.cone), 0.0, np.cos(wtg.cone)]
 ])
 
-debugIdx = (4, 0, 350)
 
 
 
@@ -67,7 +79,13 @@ debugIdx = (4, 0, 350)
 # TIME LOOP
 # ------------------------
 for i in range(sim.nSteps):
+    wind.update_wsp_time(i)
 
+    if sim.times[i] > 100.0 and sim.times[i] <= 150.0:
+        wtg.pitch0 = 2.0
+    elif sim.times[i] > 150.0:
+        wtg.pitch0 = 0.0
+    
     # BLADE LOOP
     for j in range(wtg.blades):
 
@@ -80,14 +98,11 @@ for i in range(sim.nSteps):
             idx  = (e, j, i)
 
             sim.position[:, *idx1] = func.get_position(wtg, sim, a12, a23_blade1, a34).squeeze()
-            V_local = np.array([[0.0, 0.0, sim.windSpeed[axial, *idx1]]]).T
+            V_local = np.array([[0.0, 0.0, wind.Vz]]).T
 
             if wind.hasShear:
-                V_local[axial, 0] = func.wind_shear(wind, wtg, sim.position[0, *idx1])
+                V_local[axial, 0] = func.wind_shear(wind, wtg, sim.position[0, *idx1]) # To be updated with wind turbulence
 
-            if idx == debugIdx:
-                print(f"\n We are at index {idx}\n")
-                hello = "Debug"
 
             if wind.hasTowerEffect:
                 wtg.update_tower_radius(sim.position[0, *idx1])
@@ -97,7 +112,7 @@ for i in range(sim.nSteps):
                 if isStagnant:
                     V_local = sim.windSpeed[:, *idx]
 
-            sim.windSpeed[:, *idx1] = func.go_to_ground_system(a12, a23_blade1, a34,
+            sim.windSpeed[:, *idx1] = func.go_to_blade_system(a12, a23_blade1, a34,
                                                                      V_local).squeeze()
             # sim.windSpeed[: ,*idx1] = V_local.squeeze()
 
@@ -165,6 +180,8 @@ for i in range(sim.nSteps):
             )
             end_inner_loop = "Done"
 
+    # Controller goes here 
+           
     # Compute rotor forces and torque
     Fn = aero.normalForce[:, :, i + 1]
     Ft = aero.tangentialForce[:, :, i + 1]
@@ -191,12 +208,31 @@ calculations = "Done"
 # PLOT RESULTS
 # ------------------------
 from plotter import Plotter
-plot = Plotter(wtg, sim, aero, wind, rotor)
+plot = Plotter(wtg, sim, aero, wind, rotor, style='ggplot')
 
 figspace = {
-    "title": "Thrust and Torque over Time",
-    "ylabel": "Thrust (N) / Torque (Nm)"
+    "title": "Thrust, Torque and Power over Time",
+    "ylabel": "Thrust (N) / Torque (Nm) / Power (W)"
 }
-plot.plot_timeseries(["Thrust", "Torque"], figspace)
-plot.plot_spanwise(["lift", "drag"], (16, 0, 349), {"title": "Spanwise Lift and Drag", "ylabel": "Force per unit length (N/m)"})
+plot.plot_timeseries(["Thrust", "Torque", "Power"], figspace)
+plot.plot_spanwise(["normalForce", "tangentialForce"], (16, 0, 349), {"title": r"Spanwise Pn and Pt", "ylabel": "Force per unit length (N/m)"})
+plot.plot_timeseries(["normalForce", "tangentialForce"], {"title": r"Normal and Tangent forces", "ylabel": "Force per unit length (N/m)"}, (15, 0, None))
+plot.plot_spanwise(["AoA", "flowAngle"], (None, 0, 1601), {"title": r"Spanwise AoA and Flow Angle", "ylabel": "Angle (deg)"})
 
+plot.plot_timeseries(["inducedWind"], {"title": r"Induced wind W_z", "ylabel": "Induced wind (m/s)"}, (2, 15, 0, None))
+plot.plot_timeseries(["inducedWind"], {"title": r"Induced wind W_y", "ylabel": "Induced wind (m/s)"}, (1, 15, 0, None))
+
+plot.plot_timeseries(["Cd"], {"title": r"Cd time history", "ylabel": "Cd (-)"}, (15, 0, None))
+plots = "Plotted"
+
+plot.plot_timeseries(["inducedWind", "inducedWindQS", "inducedWindInt"],
+                     {"title": r"Induced winds", "ylabel": "Induced wind (m/s)"},
+                     (2, 14, 0, None))
+
+plot.plot_timeseries(["inducedWind", "inducedWindQS", "inducedWindInt"],
+                     {"title": r"Induced winds", "ylabel": "Induced wind (m/s)"},
+                     (1, 14, 0, None))
+
+plot.plot_timeseries(["CP", "CT"], 
+                     {"title": r"Power and Thrust Coefficients", "ylabel": "Coefficient (-)"},
+                     )

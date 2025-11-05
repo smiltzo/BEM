@@ -1,6 +1,6 @@
 import numpy as np
-from BEM_dataclasses import WTG, Wind, Simulation, AeroData
-
+from dataclassesBEM import WTG, Simulation, AeroData
+from wind import Wind
 
 
 # Aerodynamics
@@ -32,9 +32,6 @@ def prandtl_tip_loss(wtg: WTG, aero: AeroData, indices: tuple[int, int, int]) ->
     sin_phi = np.sin(abs(phi))
 
     arg = np.exp((-wtg.blades / 2) * (wtg.R - wtg.bladeData["r"][e]) / (wtg.bladeData["r"][e] * sin_phi))
-
-    # arg = np.clip(arg, 1e-4, 1-1.5e-4)
-
     return 2 / np.pi * np.arccos(arg)
 
 
@@ -58,28 +55,28 @@ def compute_quasi_steady_induction(aero: AeroData, wtg: WTG, wind: Wind, sim: Si
 
 def compute_induction(aero: AeroData, sim: Simulation, wtg: WTG, wind: Wind, idx: tuple[int,int,int], k: float = 0.6):
     e, b, t = idx
-    Vz = aero.relWindSpeed[aero.AXIAL, e, b, t]
+    Vz = wind.Vz
     eps = 1e-5
 
     Wqs = compute_quasi_steady_induction(aero, wtg, wind, sim, idx)
-    aero.inducedWindQS[1:, e, b, t] = Wqs.squeeze()   # [tangential, axial]
+    aero.inducedWindQS[1:, e, b, t] = Wqs # [tangential, axial]
 
     # Quasi Steady components
     Wqs_tangential = Wqs[0]    # Tangential
     Wqs_axial = Wqs[1]      # Axial     
 
     # Induced vels at previous time step
-    Wqs_axial_prev = aero.inducedWindQS[aero.AXIAL, e, b, t - 1]    # Quasi steady
-    W_int_axial_prev = aero.inducedWindInt[1, e, b, t - 1]                     # Integrated
-    W_axial_prev = aero.inducedWind[aero.AXIAL, e, b, t - 1]          # Actual induced
+    Wqs_axial_prev = aero.inducedWindQS[aero.AXIAL, e, b, t-1]               # Quasi steady
+    W_int_axial_prev = aero.inducedWindInt[1, e, b, t-1]                     # Integrated
+    W_axial_prev = aero.inducedWind[aero.AXIAL, e, b, t-1]                   # Actual induced
 
-    Wqs_tangt_prev = aero.inducedWindQS[aero.TANGENTIAL, e, b, t - 1]
-    W_tangt_int_prev = aero.inducedWindInt[0, e, b, t - 1]
-    W_tangt_prev = aero.inducedWind[aero.TANGENTIAL, e, b, t - 1]
+    Wqs_tangt_prev = aero.inducedWindQS[aero.TANGENTIAL, e, b, t-1]
+    W_tangt_int_prev = aero.inducedWindInt[0, e, b, t-1]
+    W_tangt_prev = aero.inducedWind[aero.TANGENTIAL, e, b, t-1]
 
 
     # Avoid dividing by zero for Vz
-    dynInduction = -aero.inducedWind[aero.AXIAL, e, b, t] / Vz
+    dynInduction = aero.inducedWind[aero.AXIAL, e, b, t] / abs(Vz)
     dynInduction = np.clip(dynInduction, 0.0, 0.5) 
 
     # Time constants
@@ -98,7 +95,7 @@ def compute_induction(aero: AeroData, sim: Simulation, wtg: WTG, wind: Wind, idx
     W_tangt = W_tangt_int + (W_tangt_prev - W_tangt_int) * np.exp(-sim.dt / tau2)
 
     aero.inducedWindInt[1, *idx] = W_axial_int
-    aero.inducedWind[0, *idx] = W_tangt_int
+    aero.inducedWindInt[0, *idx] = W_tangt_int
 
     aero.inducedWind[aero.AXIAL, *idx] = W_axial
     aero.inducedWind[aero.TANGENTIAL, *idx] = W_tangt
