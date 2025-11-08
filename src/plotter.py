@@ -110,7 +110,7 @@ class Plotter:
         ax.legend()
         ax.set_xlabel("Time (s)")
         self._save_or_show(fig, filename=filename, save=save, show=show)
-        return fig
+        return fig, ax
     
 
     def plot_spanwise(self, quantities: list[str],
@@ -153,7 +153,7 @@ class Plotter:
 
         ax.legend()
         self._save_or_show(fig, filename=filename, save=save, show=show)
-        return fig
+        return fig, ax
 
 
 
