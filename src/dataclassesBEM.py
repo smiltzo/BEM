@@ -16,6 +16,8 @@ class WTG:
     thicknesses: np.ndarray = field(
         default_factory=lambda: np.array([999, 600, 480, 360, 301, 241])
     )
+
+    ratedPower: float = 10.64e6
     # Angles
     yaw: float = np.deg2rad(0.0)
     tilt: float = np.deg2rad(0.0)
@@ -48,8 +50,10 @@ class Simulation:
     dt: float = 0.15
     duration: float = 60
     r: float = 70.0            # Element position (m)
-    dynamicStall: bool = True
 
+    hasDynamicStall: bool = True
+    doPitchStep: bool = False
+    
     # Some integers
     nBlades: int = 3
     bladeElements: int = 50
@@ -86,7 +90,7 @@ class Simulation:
 
 
 
-@dataclass
+
 class AeroData:
     """ Aerodynamic data and results """
     # raise NotImplementedError("Not ready yet")
@@ -184,8 +188,11 @@ class AeroData:
 
 @dataclass
 class RotorForces:
-
     sim: "Simulation"
+    omega_min: float = 0.38
+    TSR: float = 8.0
+    momentInertia: float = 1.6e8
+    omega: np.ndarray = field(init=False)
 
     Thrust: np.ndarray = field(init=False)  # Thrust (N)
     Torque: np.ndarray = field(init=False)  # Torque (Nm)
@@ -195,11 +202,22 @@ class RotorForces:
     CQ: np.ndarray = field(init=False)  # Torque coefficient
     CP: np.ndarray = field(init=False)  # Power coefficient
 
+    Mgen: np.ndarray = field(init=False)
+    omegaGen: np.ndarray = field(init=False)
+    Pgen: np.ndarray = field(init=False)
+
     def __post_init__(self):
         self.Thrust = np.zeros(self.sim.nSteps + 1)
         self.Torque = np.zeros(self.sim.nSteps + 1)
         self.Power = np.zeros(self.sim.nSteps + 1)
 
+        self.omega = np.zeros(self.sim.nSteps + 1)
+        self.omega[0] = self.omega_min
+
         self.CT = np.zeros(self.sim.nSteps + 1)
         self.CQ = np.zeros(self.sim.nSteps + 1)
         self.CP = np.zeros(self.sim.nSteps + 1)
+
+        self.Mgen = np.zeros(self.sim.nSteps + 1)
+        self.omegaGen = np.zeros(self.sim.nSteps + 1)
+        self.Pgen = np.zeros(self.sim.nSteps + 1)

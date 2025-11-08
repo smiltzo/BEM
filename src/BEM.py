@@ -1,44 +1,55 @@
 import numpy as np
 import utils as func
 import induction as ind
-from dataclassesBEM import WTG, Simulation, AeroData, RotorForces
-from  wind import Wind, WindTurbulent
-import logging
-from datetime import datetime
+from dataclassesBEM import WTG, Simulation, RotorForces
+from aerodynamics import AeroData
+from controller import PitchControl
+from  wind import WindTurbulent
 
-# debugRunId = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-# logging.basicConfig(filename=f"Tmp/debug_log_{debugRunId}.txt", level=logging.INFO, filemode='w')
 
 # np.seterr(all='raise')
 # warnings.filterwarnings("error")
 
 # Dataclasses
 wtg = WTG(
-    pitch0= 0.0
+    pitch0=np.deg2rad(25.0),
+    yaw=0.0
 )
 sim = Simulation(
-    duration = 300.0
+    duration = 100.0,
+    hasDynamicStall=True
 )
-aero = AeroData(wtg, sim, [f"FFA-W3-{n}.csv" for n in wtg.thicknesses])
+aero = AeroData(wtg, sim)
+aero.allocate_arrays()
+aero.load_airfoils([f"FFA-W3-{n}.csv" for n in wtg.thicknesses])
+
+
 rotor = RotorForces(sim)
 
-wtg.yaw = np.deg2rad(20.0)
 tangt = aero.TANGENTIAL
 axial = aero.AXIAL
+
 
 # Load turbulence box
 wind = WindTurbulent(
     isTurbulent=True,
-    hasShear = False,
-    hasTowerEffect = False,
+    hasShear = True,
+    hasTowerEffect = True,
+    V0_z=13.0
 )
 
 if wind.isTurbulent:
     wind.load_mann_box("Data/Turb/sim1.bin")
     wind.generate_turbulent_wind(y_idx=16, z_idx=16)
-    wind.plot_contour_at_time(150)
-    wind.plot_psd_at_point(y_idx=16, z_idx=16)
+    # wind.plot_contour_at_time(150)
+    # wind.plot_psd_at_point(y_idx=16, z_idx=16)
 
+ctrl = PitchControl(
+    nSteps = sim.nSteps,
+    kp = 1.5,
+    ki = 0.64
+)
+steadyPower = 0.5 * wind.density * np.pi * wtg.R**2 * wind.V0_z**3 * 16/27
 
 # ------------------------
 # TRANSFORMATION MATRICES
@@ -73,23 +84,24 @@ a34 = np.array([
 ])
 
 
-
-
 # ------------------------
 # TIME LOOP
 # ------------------------
 for i in range(sim.nSteps):
     wind.update_wsp_time(i)
+    if i == 341:
+        stop = True
 
-    if sim.times[i] > 100.0 and sim.times[i] <= 150.0:
-        wtg.pitch0 = 2.0
-    elif sim.times[i] > 150.0:
-        wtg.pitch0 = 0.0
+    if sim.doPitchStep:
+        if sim.times[i] > 100.0 and sim.times[i] <= 150.0:
+            wtg.pitch0 = 2.0
+        elif sim.times[i] > 150.0:
+            wtg.pitch0 = 0.0
     
     # BLADE LOOP
     for j in range(wtg.blades):
 
-        sim.theta[j, i + 1] = sim.theta[j, i] + sim.omega * sim.dt
+        sim.theta[j, i + 1] = sim.theta[j, i] + rotor.omega[i] * sim.dt
         a23_blade1 = func.get_a23(sim.theta[j, i + 1])
 
         # BLADE ELEMENT LOOP
@@ -117,7 +129,7 @@ for i in range(sim.nSteps):
             # sim.windSpeed[: ,*idx1] = V_local.squeeze()
 
             # BEM stuff - Induced wind
-            aero.relWindSpeed[tangt, *idx1] = (sim.windSpeed[tangt, *idx1] + aero.inducedWind[tangt, *idx] - sim.omega * wtg.bladeData["r"][e] * np.cos(wtg.cone)).squeeze()
+            aero.relWindSpeed[tangt, *idx1] = (sim.windSpeed[tangt, *idx1] + aero.inducedWind[tangt, *idx] - rotor.omega[i] * wtg.bladeData["r"][e] * np.cos(wtg.cone)).squeeze()
             aero.relWindSpeed[axial, *idx1] = (sim.windSpeed[axial, *idx1] + aero.inducedWind[axial, *idx]).squeeze()
 
             try:
@@ -130,15 +142,15 @@ for i in range(sim.nSteps):
             aero.flowAngle[*idx1] = flowAngle
 
             # AoA in degrees
-            aero.AoA[*idx1] = np.rad2deg(aero.flowAngle[*idx1]) - (wtg.bladeData["twist"][e] + wtg.pitch0)
+            aero.AoA[*idx1] = np.rad2deg(aero.flowAngle[*idx1]) - (wtg.bladeData["twist"][e] + np.rad2deg(ctrl.pitch[i]))
 
-            relWindSpeedMagnitude = np.hypot(aero.relWindSpeed[1, *idx1], aero.relWindSpeed[2, *idx1])
+            relWindSpeedMagnitude = np.hypot(aero.relWindSpeed[tangt, *idx1], aero.relWindSpeed[axial, *idx1])
 
             # Read and interpolate lift and drag
             point = np.atleast_2d((aero.AoA[*idx1], wtg.bladeData["thick"][e]))
             Cd = func.interpolate_drag(aero, wtg, point)
 
-            if sim.dynamicStall:
+            if sim.hasDynamicStall:
                 # S. Øye dyn. stall model
                 cl_inv, f_s, cl_fs = func.interpolate_coeffs_dyn_stall(aero, wtg, point)
 
@@ -180,24 +192,38 @@ for i in range(sim.nSteps):
             )
             end_inner_loop = "Done"
 
-    # Controller goes here 
-           
+    # PI controller
+    ctrl.step(i=i, omega=rotor.omega[i], dt=sim.dt)
+
     # Compute rotor forces and torque
     Fn = aero.normalForce[:, :, i + 1]
     Ft = aero.tangentialForce[:, :, i + 1]
 
-    dT = Fn * wtg.bladeData["dr"][:, None]
-    dQ = Ft * (wtg.bladeData["r"] * wtg.bladeData["dr"])[:, None]
 
-    T = wtg.blades * np.mean(np.sum(dT, axis=0))
-    Q = wtg.blades * np.mean(np.sum(dQ, axis=0))
-    P = Q * sim.omega
+    T = np.trapz(np.sum(Fn, axis=1), wtg.bladeData["r"], axis=0)
+    Q = np.trapz((np.sum(Ft, axis=1) * wtg.bladeData["r"]), wtg.bladeData["r"], axis=0)
+
+    P = Q * rotor.omega[i]
 
     rotor.CT[i+1] = T / (0.5 * wind.density * np.pi * wtg.R**2 * sim.windSpeed[2, *idx1]**2)
     rotor.CQ[i+1] = Q / (0.5 * wind.density * np.pi * wtg.R**2 * sim.windSpeed[2, *idx1]**2 * wtg.R)
     rotor.CP[i+1] = P / (0.5 * wind.density * np.pi * wtg.R**2 * sim.windSpeed[2, *idx1]**3)
 
     rotor.Thrust[i+1], rotor.Torque[i+1], rotor.Power[i+1] = T, Q, P
+
+    # CpMax = steadyPower / (0.5 * wind.density * np.pi * wtg.R**2 * wind.V0_z**3)
+    K = 1 / 2 / rotor.TSR**3 * wind.density * np.pi * wtg.R**5 * 0.4619
+    Pgen = K * rotor.omega[i]**3
+    # omegaGen = (Pgen / K ) ** (1/3)
+
+    if rotor.omega[i] <= ctrl.omega_ref:
+        Mgen = K * rotor.omega[i]**2
+    else:
+        Mgen = wtg.ratedPower / rotor.omega[i]
+
+
+    rotor.omega[i + 1] = rotor.omega[i] + (Q - Mgen) / rotor.momentInertia * sim.dt
+    rotor.Mgen[i + 1], rotor.Pgen[i + 1] = Mgen, Pgen
 
 
 calculations = "Done"
@@ -215,9 +241,11 @@ figspace = {
     "ylabel": "Thrust (N) / Torque (Nm) / Power (W)"
 }
 plot.plot_timeseries(["Thrust", "Torque", "Power"], figspace)
-plot.plot_spanwise(["normalForce", "tangentialForce"], (16, 0, 349), {"title": r"Spanwise Pn and Pt", "ylabel": "Force per unit length (N/m)"})
+plot.plot_spanwise(["normalForce", "tangentialForce"],
+                   {"title": r"Spanwise Pn and Pt", "ylabel": "Force per unit length (N/m)"}, (16, 0, 600))
 plot.plot_timeseries(["normalForce", "tangentialForce"], {"title": r"Normal and Tangent forces", "ylabel": "Force per unit length (N/m)"}, (15, 0, None))
-plot.plot_spanwise(["AoA", "flowAngle"], (None, 0, 1601), {"title": r"Spanwise AoA and Flow Angle", "ylabel": "Angle (deg)"})
+plot.plot_spanwise(["AoA", "flowAngle"],
+                   {"title": r"Spanwise AoA and Flow Angle", "ylabel": "Angle (deg)"},  (None, 0, 600))
 
 plot.plot_timeseries(["inducedWind"], {"title": r"Induced wind W_z", "ylabel": "Induced wind (m/s)"}, (2, 15, 0, None))
 plot.plot_timeseries(["inducedWind"], {"title": r"Induced wind W_y", "ylabel": "Induced wind (m/s)"}, (1, 15, 0, None))
@@ -225,14 +253,57 @@ plot.plot_timeseries(["inducedWind"], {"title": r"Induced wind W_y", "ylabel": "
 plot.plot_timeseries(["Cd"], {"title": r"Cd time history", "ylabel": "Cd (-)"}, (15, 0, None))
 plots = "Plotted"
 
-plot.plot_timeseries(["inducedWind", "inducedWindQS", "inducedWindInt"],
+plot.plot_timeseries(["inducedWind", "inducedWindQS"],
                      {"title": r"Induced winds", "ylabel": "Induced wind (m/s)"},
                      (2, 14, 0, None))
 
-plot.plot_timeseries(["inducedWind", "inducedWindQS", "inducedWindInt"],
+plot.plot_timeseries(["inducedWind", "inducedWindQS"],
                      {"title": r"Induced winds", "ylabel": "Induced wind (m/s)"},
                      (1, 14, 0, None))
 
 plot.plot_timeseries(["CP", "CT"], 
                      {"title": r"Power and Thrust Coefficients", "ylabel": "Coefficient (-)"},
                      )
+
+plot.plot_spanwise(["inducedWind", "inducedWindQS"],
+                   {"title": "Axial Spanwise induction", "ylabel": "Induction velocity (m/s)"},
+                   (2, None, 0, 600))
+
+plot.plot_spanwise(["inducedWind", "inducedWindQS"],
+                   {"title": "Tangential Spanwise induction", "ylabel": "Induction velocity (m/s)"},
+                   (1, None, 0, 600))
+
+plot.plot_timeseries(["Power"], {"title": "Power", "ylabel": "Power (W)"})
+
+plot.plot_timeseries(["AoA", "flowAngle"], {"title": r"\alpha and \phi", "ylabel": "Angle (deg)"}, (15, 0, None))
+
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(2, 1, figsize=(12,7))
+ax[0].plot(sim.times[1:], rotor.omegaGen[1:], label='controller')
+ax[0].set_title('Controller')
+ax[1].plot(sim.times[1:], rotor.omega[1:], label='rotor')
+ax[1].hlines(y=ctrl.omega_ref, xmin=0, xmax=sim.times[-1], linestyles='--')
+ax[1].set_title('Rotor')
+fig.tight_layout()
+plt.show()
+
+
+fig, ax = plt.subplots(2, 1, figsize=(12,7))
+ax[0].plot(sim.times[1:], rotor.Mgen[1:], label='Generator')
+ax[0].plot(sim.times[1:], rotor.Torque[1:], label='Aerodynamic')
+ax[0].legend()
+ax[0].set_title('Gen Moment')
+ax[1].plot(sim.times[1:], rotor.Pgen[1:], label='Generator')
+ax[1].plot(sim.times[1:], rotor.Power[1:], label='Aerodynamic')
+ax[1].set_title('Power')
+ax[1].legend()
+fig.tight_layout()
+plt.show()
+
+
+plt.figure()
+plt.plot(sim.times[1:], np.rad2deg(ctrl.pitch[1:]))
+plt.xlabel('Time (s)')
+plt.ylabel('Pitch angle (deg)')
+plt.show()
+

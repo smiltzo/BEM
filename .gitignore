@@ -15,6 +15,7 @@ Thumbs.db
 
 Docs/
 Tmp/
+Legacy/
 __pycache__/
 *.pyc
 venv/

@@ -114,8 +114,8 @@ class Plotter:
     
 
     def plot_spanwise(self, quantities: list[str],
-                  indices: tuple[int, int, int, int],
                   figSpecs: dict,
+                  indices: tuple[int, int, int, int],
                   save: bool = False, show: bool = True,
                   filename: Optional[str] = None) -> plt.Figure:
     

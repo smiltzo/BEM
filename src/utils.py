@@ -123,4 +123,3 @@ def interpolate_drag(aero: AeroData, wtg: WTG,
     
     return float(Cd_interpolator(point))
 
-
